@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Mi Abuelita Meri - Autonomous Content Creator
-Runs continuously and creates content automatically
+Mi Abuelita Meri - Content Review System
+Creates videos and saves them for your approval before upload
 """
 
 import os
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class AbuelitaMeriBot:
-    """Autonomous content creator for Mi Abuelita Meri channel"""
+    """Autonomous content creator - saves for review, no auto-upload"""
     
     def __init__(self):
         self.api_base = "http://localhost:5000"
@@ -35,6 +35,14 @@ class AbuelitaMeriBot:
         self.voice_profile = "abuelita_meri"
         self.daily_count = 0
         self.max_daily_videos = 3
+        
+        # Review folder - videos go here for your approval
+        self.review_dir = os.path.join("output", "for_review")
+        os.makedirs(self.review_dir, exist_ok=True)
+        
+        # Approved folder - you move videos here when ready
+        self.approved_dir = os.path.join("output", "approved")
+        os.makedirs(self.approved_dir, exist_ok=True)
         
         # Episode topics queue
         self.topic_queue = [
@@ -71,7 +79,7 @@ class AbuelitaMeriBot:
                     "topic": topic,
                     "content_type": "abuelita_meri",
                     "style": "humorous",
-                    "length": 10,  # 10-minute episodes
+                    "length": 10,
                     "language": "spanish",
                     "voice_profile": self.voice_profile
                 },
@@ -249,6 +257,58 @@ class AbuelitaMeriBot:
             logger.error(f"Thumbnail error: {e}")
             return None
     
+    def save_for_review(self, video_result, thumbnail, script, episode_type):
+        """Save video and thumbnail to review folder"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            review_name = f"{episode_type}_{timestamp}"
+            
+            # Create review folder
+            review_folder = os.path.join(self.review_dir, review_name)
+            os.makedirs(review_folder, exist_ok=True)
+            
+            # Copy video
+            if video_result and video_result.get("filepath"):
+                import shutil
+                src = video_result["filepath"]
+                dst = os.path.join(review_folder, f"{review_name}.mp4")
+                shutil.copy2(src, dst)
+                logger.info(f"Video saved for review: {dst}")
+            
+            # Copy thumbnail
+            if thumbnail and os.path.exists(thumbnail):
+                import shutil
+                dst = os.path.join(review_folder, f"{review_name}_thumbnail.png")
+                shutil.copy2(thumbnail, dst)
+                logger.info(f"Thumbnail saved for review: {dst}")
+            
+            # Save script
+            script_path = os.path.join(review_folder, f"{review_name}_script.json")
+            with open(script_path, 'w', encoding='utf-8') as f:
+                json.dump(script, f, indent=2, ensure_ascii=False)
+            logger.info(f"Script saved for review: {script_path}")
+            
+            # Create info file
+            info_path = os.path.join(review_folder, "INFO.txt")
+            with open(info_path, 'w', encoding='utf-8') as f:
+                f.write(f"Episode: {script.get('title', 'Unknown')}\n")
+                f.write(f"Type: {episode_type}\n")
+                f.write(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Scenes: {len(script.get('scenes', []))}\n")
+                f.write(f"\nTO APPROVE:\n")
+                f.write(f"1. Watch the video\n")
+                f.write(f"2. If approved, move this folder to: output/approved/\n")
+                f.write(f"3. Upload to YouTube manually\n")
+            
+            logger.info(f"\nContent saved for review in: {review_folder}")
+            logger.info(f"Review the video and move to 'approved' folder when ready")
+            
+            return review_folder
+            
+        except Exception as e:
+            logger.error(f"Error saving for review: {e}")
+            return None
+    
     def create_episode(self):
         """Create one complete episode"""
         if self.daily_count >= self.max_daily_videos:
@@ -286,16 +346,27 @@ class AbuelitaMeriBot:
         video = self.create_video(script, episode_type)
         
         if video:
+            # Step 6: Save for review (NO UPLOAD)
+            review_folder = self.save_for_review(video, thumbnail, script, episode_type)
+            
             self.daily_count += 1
-            logger.info(f"\nEpisode created successfully!")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"EPISODE CREATED - WAITING FOR YOUR APPROVAL")
+            logger.info(f"{'='*60}")
             logger.info(f"Video: {video.get('filepath')}")
-            logger.info(f"Thumbnail: {thumbnail}")
+            logger.info(f"Review folder: {review_folder}")
             logger.info(f"Daily count: {self.daily_count}/{self.max_daily_videos}")
+            logger.info(f"\nTo approve and upload:")
+            logger.info(f"1. Watch the video in the review folder")
+            logger.info(f"2. Move the folder to 'output/approved/'")
+            logger.info(f"3. Upload to YouTube manually")
+            logger.info(f"{'='*60}\n")
             
             return {
                 "video": video,
                 "thumbnail": thumbnail,
-                "script": script
+                "script": script,
+                "review_folder": review_folder
             }
         else:
             logger.error("Video creation failed")
@@ -307,6 +378,8 @@ class AbuelitaMeriBot:
         logger.info(f"Channel: {self.channel_name}")
         logger.info(f"Schedule: 9:00 AM, 2:00 PM, 7:00 PM")
         logger.info(f"Max daily videos: {self.max_daily_videos}")
+        logger.info(f"Review folder: {self.review_dir}")
+        logger.info(f"NO AUTO-UPLOAD - Videos saved for your approval")
         
         # Schedule content creation
         schedule.every().day.at("09:00").do(self.create_episode)
@@ -321,7 +394,7 @@ class AbuelitaMeriBot:
         try:
             while True:
                 schedule.run_pending()
-                time.sleep(60)  # Check every minute
+                time.sleep(60)
         except KeyboardInterrupt:
             logger.info("\nBot stopped by user")
         except Exception as e:
@@ -341,19 +414,19 @@ class AbuelitaMeriBot:
 def main():
     """Main entry point"""
     print("\n" + "="*60)
-    print("  Mi Abuelita Meri - Autonomous Content Creator")
-    print("  Bochinches, Cuentos, y Mareas de Oro")
+    print("  Mi Abuelita Meri - Content Creator")
+    print("  WITH REVIEW SYSTEM - NO AUTO-UPLOAD")
     print("="*60 + "\n")
     
     bot = AbuelitaMeriBot()
     
-    # Ask user what to do
     print("Options:")
-    print("1. Create one episode now")
+    print("1. Create one episode for review")
     print("2. Run scheduled automation (9 AM, 2 PM, 7 PM)")
-    print("3. Create multiple episodes now")
+    print("3. Create multiple episodes for review")
+    print("4. Check pending reviews")
     
-    choice = input("\nSelect option (1/2/3): ").strip()
+    choice = input("\nSelect option (1/2/3/4): ").strip()
     
     if choice == "1":
         bot.run_now()
@@ -367,6 +440,19 @@ def main():
             if i < count - 1:
                 print("Waiting 30 seconds before next episode...")
                 time.sleep(30)
+    elif choice == "4":
+        review_dir = os.path.join("output", "for_review")
+        if os.path.exists(review_dir):
+            folders = os.listdir(review_dir)
+            if folders:
+                print(f"\nPending reviews ({len(folders)}):")
+                for folder in folders:
+                    print(f"  - {folder}")
+                print(f"\nReview them in: {review_dir}")
+            else:
+                print("\nNo pending reviews")
+        else:
+            print("\nNo review folder found")
     else:
         print("Invalid choice")
 
