@@ -36,13 +36,22 @@ class AbuelitaMeriBot:
         self.daily_count = 0
         self.max_daily_videos = 3
         
+        # Base directory (workspace folder)
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.output_dir = os.path.join(self.base_dir, "workspace", "output")
+        
         # Review folder - videos go here for your approval
-        self.review_dir = os.path.join("output", "for_review")
+        self.review_dir = os.path.join(self.output_dir, "for_review")
         os.makedirs(self.review_dir, exist_ok=True)
         
         # Approved folder - you move videos here when ready
-        self.approved_dir = os.path.join("output", "approved")
+        self.approved_dir = os.path.join(self.output_dir, "approved")
         os.makedirs(self.approved_dir, exist_ok=True)
+        
+        # Server output directories
+        self.server_images_dir = os.path.join(self.output_dir, "images")
+        self.server_audio_dir = os.path.join(self.output_dir, "audio")
+        self.server_videos_dir = os.path.join(self.output_dir, "videos")
         
         # Episode topics queue
         self.topic_queue = [
@@ -79,11 +88,11 @@ class AbuelitaMeriBot:
                     "topic": topic,
                     "content_type": "abuelita_meri",
                     "style": "humorous",
-                    "length": 10,
+                    "length": 90,  # 90 minutes = 3 actos x 30 min each
                     "language": "spanish",
                     "voice_profile": self.voice_profile
                 },
-                timeout=180
+                timeout=300  # Longer timeout for 90-min script
             )
             
             if response.status_code == 200:
@@ -105,8 +114,13 @@ class AbuelitaMeriBot:
                             logger.error("Failed to parse script JSON")
                             return None
                     
-                    scenes = script.get("scenes", [])
-                    logger.info(f"Generated {len(scenes)} scenes")
+                    # Count scenes based on format
+                    if "actos" in script:
+                        escena_count = sum(len(a.get("escenas", [])) for a in script.get("actos", []))
+                        logger.info(f"Generated 3 actos with {escena_count} escenas (90 min)")
+                    else:
+                        scenes = script.get("scenes", [])
+                        logger.info(f"Generated {len(scenes)} scenes")
                     return script
             
             logger.error("Script generation failed")
@@ -116,18 +130,24 @@ class AbuelitaMeriBot:
             logger.error(f"Script error: {e}")
             return None
     
-    def generate_images(self, scenes):
-        """Generate images for scenes"""
-        logger.info(f"Generating images for {len(scenes)} scenes")
+    def generate_images(self, scenes_or_script):
+        """Generate images for scenes or full script with actos"""
+        # Check if it's a script with actos
+        if scenes_or_script and isinstance(scenes_or_script[0], dict) and "actos" in scenes_or_script[0]:
+            logger.info("Generating images for 90-min script with actos structure")
+            # Count total images: 3 acto + 9 escena = 12 images
+            logger.info("Generating: 3 acto images + 9 escena images = 12 total")
+        else:
+            logger.info(f"Generating images for {len(scenes_or_script)} scenes")
         
         try:
             response = requests.post(
                 f"{self.api_base}/api/generate-images",
                 json={
-                    "scenes": scenes,
+                    "scenes": scenes_or_script,
                     "style": "3d_pixar"
                 },
-                timeout=600
+                timeout=900  # Longer timeout for 12 images
             )
             
             if response.status_code == 200:
@@ -144,22 +164,27 @@ class AbuelitaMeriBot:
             logger.error(f"Image error: {e}")
             return []
     
-    def generate_audio(self, scenes):
-        """Generate audio for scenes"""
-        logger.info(f"Generating audio for {len(scenes)} scenes")
+    def generate_audio(self, scenes_or_script):
+        """Generate audio for scenes or full script with actos"""
+        # Check if it's a script with actos
+        if scenes_or_script and isinstance(scenes_or_script[0], dict) and "actos" in scenes_or_script[0]:
+            logger.info("Generating audio for 90-min script with actos structure")
+            logger.info("Generating: 9 escena audio files")
+        else:
+            logger.info(f"Generating audio for {len(scenes_or_script)} scenes")
         
         try:
             response = requests.post(
                 f"{self.api_base}/api/generate-audio",
                 json={
-                    "scenes": scenes,
+                    "scenes": scenes_or_script,
                     "language": "spanish",
                     "gender": "female",
                     "voice_index": 0,
                     "engine": "edge",
                     "profile": self.voice_profile
                 },
-                timeout=600
+                timeout=900  # Longer timeout for 9 audio files
             )
             
             if response.status_code == 200:
@@ -191,7 +216,7 @@ class AbuelitaMeriBot:
                     "script": script,
                     "quality": "high"
                 },
-                timeout=900
+                timeout=1800  # 30 minutes timeout for 90-min video
             )
             
             if response.status_code == 200:
@@ -244,7 +269,7 @@ class AbuelitaMeriBot:
             draw.text((x, height - 100), channel, fill=(255, 255, 0), font=small_font)
             
             # Save
-            thumbnail_dir = os.path.join("output", "thumbnails")
+            thumbnail_dir = os.path.join(self.output_dir, "thumbnails")
             os.makedirs(thumbnail_dir, exist_ok=True)
             filename = f"thumbnail_{episode_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             filepath = os.path.join(thumbnail_dir, filename)
@@ -261,26 +286,74 @@ class AbuelitaMeriBot:
         """Save video and thumbnail to review folder"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            review_name = f"{episode_type}_{timestamp}"
+            
+            # Clean episode title for folder name (SHORTEN to avoid path length issues)
+            clean_title = script.get('title', episode_type)
+            clean_title = clean_title.replace(' ', '_').replace('ñ', 'n').replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+            clean_title = ''.join(c for c in clean_title if c.isalnum() or c in '_-')
+            # Shorten to first 30 chars
+            clean_title = clean_title[:30]
+            
+            review_name = f"EP_{clean_title}_{timestamp}"
             
             # Create review folder
             review_folder = os.path.join(self.review_dir, review_name)
             os.makedirs(review_folder, exist_ok=True)
+            logger.info(f"Created review folder: {review_folder}")
             
-            # Copy video
+            # Create subfolders for organization
+            images_folder = os.path.join(review_folder, "images")
+            audio_folder = os.path.join(review_folder, "audio")
+            os.makedirs(images_folder, exist_ok=True)
+            os.makedirs(audio_folder, exist_ok=True)
+            
+            # Copy video - use shutil.copy with bytes mode
             if video_result and video_result.get("filepath"):
                 import shutil
-                src = video_result["filepath"]
+                import shutil as sh
+                src = str(video_result["filepath"])
                 dst = os.path.join(review_folder, f"{review_name}.mp4")
-                shutil.copy2(src, dst)
-                logger.info(f"Video saved for review: {dst}")
+                logger.info(f"Copying video: {src} -> {dst}")
+                try:
+                    sh.copy(src, dst)
+                    logger.info(f"Video saved: {dst}")
+                except Exception as e:
+                    logger.error(f"Video copy failed: {e}")
             
             # Copy thumbnail
-            if thumbnail and os.path.exists(thumbnail):
-                import shutil
+            if thumbnail:
+                import shutil as sh
                 dst = os.path.join(review_folder, f"{review_name}_thumbnail.png")
-                shutil.copy2(thumbnail, dst)
-                logger.info(f"Thumbnail saved for review: {dst}")
+                logger.info(f"Copying thumbnail: {thumbnail} -> {dst}")
+                try:
+                    sh.copy(thumbnail, dst)
+                    logger.info(f"Thumbnail saved: {dst}")
+                except Exception as e:
+                    logger.error(f"Thumbnail copy failed: {e}")
+            
+            # Copy images
+            try:
+                if os.path.exists(self.server_images_dir):
+                    for img_file in os.listdir(self.server_images_dir):
+                        if img_file.endswith(('.png', '.jpg', '.jpeg')):
+                            src = os.path.join(self.server_images_dir, img_file)
+                            dst = os.path.join(images_folder, img_file)
+                            shutil.copy2(src, dst)
+                    logger.info(f"Images copied")
+            except Exception as e:
+                logger.error(f"Copy images error: {e}")
+            
+            # Copy audio
+            try:
+                if os.path.exists(self.server_audio_dir):
+                    for audio_file in os.listdir(self.server_audio_dir):
+                        if audio_file.endswith('.mp3'):
+                            src = os.path.join(self.server_audio_dir, audio_file)
+                            dst = os.path.join(audio_folder, audio_file)
+                            shutil.copy2(src, dst)
+                    logger.info(f"Audio copied")
+            except Exception as e:
+                logger.error(f"Copy audio error: {e}")
             
             # Save script
             script_path = os.path.join(review_folder, f"{review_name}_script.json")
@@ -288,19 +361,46 @@ class AbuelitaMeriBot:
                 json.dump(script, f, indent=2, ensure_ascii=False)
             logger.info(f"Script saved for review: {script_path}")
             
+            # Count scenes
+            if "actos" in script:
+                escena_count = sum(len(a.get("escenas", [])) for a in script.get("actos", []))
+                acto_count = len(script.get("actos", []))
+                structure = f"{acto_count} Actos x {escena_count} Escenas"
+            else:
+                escena_count = len(script.get("scenes", []))
+                structure = f"{escena_count} Scenes"
+            
             # Create info file
             info_path = os.path.join(review_folder, "INFO.txt")
             with open(info_path, 'w', encoding='utf-8') as f:
+                f.write(f"=========================================\n")
+                f.write(f"  ABUELITA MERI - EPISODE PACKAGE\n")
+                f.write(f"=========================================\n\n")
                 f.write(f"Episode: {script.get('title', 'Unknown')}\n")
                 f.write(f"Type: {episode_type}\n")
+                f.write(f"Duration: 90 minutes\n")
+                f.write(f"Structure: {structure}\n")
                 f.write(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Scenes: {len(script.get('scenes', []))}\n")
-                f.write(f"\nTO APPROVE:\n")
+                f.write(f"\n=========================================\n")
+                f.write(f"  FOLDER CONTENTS\n")
+                f.write(f"=========================================\n")
+                f.write(f"- {review_name}.mp4 (Final Video)\n")
+                f.write(f"- {review_name}_thumbnail.png (Thumbnail)\n")
+                f.write(f"- {review_name}_script.json (Script)\n")
+                f.write(f"- images/ (Scene images)\n")
+                f.write(f"- audio/ (Audio files)\n")
+                f.write(f"\n=========================================\n")
+                f.write(f"  TO APPROVE & UPLOAD\n")
+                f.write(f"=========================================\n")
                 f.write(f"1. Watch the video\n")
-                f.write(f"2. If approved, move this folder to: output/approved/\n")
-                f.write(f"3. Upload to YouTube manually\n")
+                f.write(f"2. Check images/audio folders\n")
+                f.write(f"3. If approved, move entire folder to: output/approved/\n")
+                f.write(f"4. Upload video to YouTube\n")
             
-            logger.info(f"\nContent saved for review in: {review_folder}")
+            logger.info(f"\n=========================================")
+            logger.info(f"EPISODE SAVED: {review_name}")
+            logger.info(f"=========================================")
+            logger.info(f"Folder: {review_folder}")
             logger.info(f"Review the video and move to 'approved' folder when ready")
             
             return review_folder
@@ -321,11 +421,12 @@ class AbuelitaMeriBot:
         episode_type = topic_data["type"]
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"Creating Episode: {topic}")
+        logger.info(f"Creating 90-Minute Episode: {topic}")
         logger.info(f"Type: {episode_type}")
+        logger.info(f"Structure: 3 Actos x 30 min x 3 Escenas = 9 scenes")
         logger.info(f"{'='*60}\n")
         
-        # Step 1: Generate script
+        # Step 1: Generate script (90 minutes)
         script = self.generate_script(topic)
         if not script:
             logger.error("Failed to generate script")
@@ -335,12 +436,11 @@ class AbuelitaMeriBot:
         title = script.get("title", topic)
         thumbnail = self.generate_thumbnail(title, episode_type)
         
-        # Step 3: Generate images
-        scenes = script.get("scenes", [])
-        images = self.generate_images(scenes)
+        # Step 3: Generate images (send full script for actos/escenas structure)
+        images = self.generate_images([script])  # Send as list with script
         
-        # Step 4: Generate audio
-        audio = self.generate_audio(scenes)
+        # Step 4: Generate audio (send full script for actos/escenas structure)
+        audio = self.generate_audio([script])  # Send as list with script
         
         # Step 5: Create video
         video = self.create_video(script, episode_type)
@@ -351,7 +451,7 @@ class AbuelitaMeriBot:
             
             self.daily_count += 1
             logger.info(f"\n{'='*60}")
-            logger.info(f"EPISODE CREATED - WAITING FOR YOUR APPROVAL")
+            logger.info(f"90-MINUTE EPISODE CREATED - WAITING FOR YOUR APPROVAL")
             logger.info(f"{'='*60}")
             logger.info(f"Video: {video.get('filepath')}")
             logger.info(f"Review folder: {review_folder}")
